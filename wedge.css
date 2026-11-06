@@ -1,0 +1,69 @@
+:root{
+  --bg:#0b0d10; --panel:#14181d; --panel2:#1a1f26; --line:#252c35;
+  --fg:#e8edf3; --mute:#8b95a3; --accent:#f0b90b; --ok:#3ddc84; --err:#ff5c5c;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:radial-gradient(1200px 600px at 50% -10%,#1b232e 0%,var(--bg) 55%);
+  color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  min-height:100vh;padding:28px 16px 64px;display:flex;flex-direction:column;align-items:center;
+}
+.wrap{width:100%;max-width:520px}
+header{margin-bottom:20px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.02em;font-size:17px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(240,185,11,.14)}
+h1{font-size:26px;line-height:1.2;letter-spacing:-.03em;margin:14px 0 8px;font-weight:680}
+.sub{color:var(--mute);font-size:14px;margin:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:18px}
+label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin-bottom:7px;font-weight:600}
+label .opt{text-transform:none;letter-spacing:0;font-weight:400}
+.row{display:flex;gap:10px}
+.row>*{min-width:0}
+input,select,button{font:inherit;color:var(--fg)}
+input,select{
+  width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:13px;outline:none;transition:border-color .15s
+}
+input:focus,select:focus{border-color:#3a4553}
+input[type=number]{font-family:var(--mono);font-size:18px}
+.field{margin-bottom:15px}
+.hint{font-size:12px;color:var(--mute);margin-top:6px}
+button{
+  width:100%;background:var(--accent);color:#141414;border:0;border-radius:10px;padding:14px;
+  font-weight:680;cursor:pointer;letter-spacing:-.01em;transition:filter .15s,opacity .15s
+}
+button:hover:not(:disabled){filter:brightness(1.07)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);font-weight:560}
+.amt-line{display:flex;align-items:center;gap:8px}
+.quote{display:none;margin-top:16px;border-top:1px solid var(--line);padding-top:16px}
+.quote.on{display:block}
+.big{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}
+.big .v{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.02em}
+.big .k{font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:13.5px}
+.kv .k{color:var(--mute)}
+.kv .v{font-family:var(--mono)}
+.box{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:13px;margin-top:12px}
+.addr{font-family:var(--mono);font-size:12.5px;word-break:break-all;line-height:1.45}
+.copy{margin-top:10px;width:auto;padding:8px 15px;font-size:13px}
+.status{margin-top:14px;font-size:13.5px;display:flex;align-items:center;gap:9px}
+.spin{width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;flex:0 0 auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+.pill{font-size:11px;padding:3px 8px;border-radius:20px;background:rgba(139,149,163,.14);color:var(--mute);font-weight:600}
+.pill.ok{background:rgba(61,220,132,.14);color:var(--ok)}
+.pill.bad{background:rgba(255,92,92,.14);color:var(--err)}
+footer{margin-top:26px;font-size:11.5px;color:#6b7583;line-height:1.6}
+a{color:#9fb0c4}
+.steps{counter-reset:s;list-style:none;padding:0;margin:12px 0 0}
+.steps li{counter-increment:s;position:relative;padding-left:26px;margin-bottom:9px;font-size:13.5px;color:#c3ccd8}
+.steps li:before{
+  content:counter(s);position:absolute;left:0;top:0;width:17px;height:17px;border-radius:50%;
+  background:var(--panel2);border:1px solid var(--line);font-size:10.5px;
+  display:flex;align-items:center;justify-content:center;color:var(--mute)
+}
+.hidden{display:none!important}
+.errbox{margin-top:12px;background:rgba(255,92,92,.09);border:1px solid rgba(255,92,92,.3);color:#ffb3b3;border-radius:10px;padding:11px 13px;font-size:13px}
+@media (max-width:420px){ h1{font-size:22px} }

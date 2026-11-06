@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Exit BNB Chain — move USDC off BSC in one deposit</title>
+<meta name="description" content="Move USDC or USDT off BNB Smart Chain to Base, Arbitrum, Ethereum or Polygon in a single deposit. Routed through NEAR Intents.">
+<link rel="stylesheet" href="wedge.css">
+</head>
+<body>
+<div id="app"></div>
+<script>
+window.WEDGE_CONFIG = {
+  id: "bsc-out",
+  brand: "Exit BNB Chain",
+  headline: "Move USDC off BNB Chain.",
+  sub: "One deposit, no bridge approvals, no gas on the destination chain. Routed through NEAR Intents.",
+  referral: "hermes-wedge-bsc",
+  feeBps: 20,
+  recipient: "0x94f080a1BF54d73d565AF55afDC622bABD62CE77",
+  allowOriginSelect: false,
+  origins: [{ blockchain: "bsc", label: "BNB Chain" }],
+  assets: ["USDC", "USDT"],
+  destinations: [
+    { blockchain: "base", label: "Base" },
+    { blockchain: "arb",  label: "Arbitrum" },
+    { blockchain: "eth",  label: "Ethereum" },
+    { blockchain: "pol",  label: "Polygon" }
+  ],
+  minHint: "This corridor carries a routing-layer minimum (roughly $1–2k, and it moves with liquidity). If your amount is refused, try more — or use the Ethereum ⇄ Base corridor, which has no minimum."
+};
+</script>
+<script src="wedge-core.js"></script>
+</body>
+</html>

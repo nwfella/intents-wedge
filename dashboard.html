@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wedge — operator dashboard</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#14181d; --panel2:#1a1f26; --line:#252c35;
+    --fg:#e8edf3; --mute:#8b95a3; --accent:#f0b90b; --ok:#3ddc84; --err:#ff5c5c;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:26px 16px 60px}
+  .wrap{max-width:940px;margin:0 auto}
+  h1{font-size:20px;letter-spacing:-.02em;margin:0 0 4px}
+  .sub{color:var(--mute);font-size:13px;margin:0 0 20px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 14px}
+  .kpi .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);font-weight:600}
+  .kpi .v{font-family:var(--mono);font-size:20px;font-weight:600;margin-top:5px;letter-spacing:-.02em}
+  .kpi .v.ok{color:var(--ok)}
+  .bar{display:flex;gap:9px;margin-bottom:16px;flex-wrap:wrap}
+  button{font:inherit;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:9px;padding:9px 13px;cursor:pointer;font-weight:560}
+  button:hover{border-color:#3a4553}
+  button.primary{background:var(--accent);color:#141414;border-color:transparent;font-weight:680}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:10px 12px;font-size:13px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);font-weight:600;background:var(--panel2)}
+  td.num,th.num{text-align:right;font-family:var(--mono)}
+  tr:last-child td{border-bottom:0}
+  .pill{font-size:10.5px;padding:2px 7px;border-radius:20px;background:rgba(61,220,132,.14);color:var(--ok);font-weight:600}
+  .pill.bad{background:rgba(255,92,92,.14);color:var(--err)}
+  .empty{padding:26px;text-align:center;color:var(--mute);font-size:13px}
+  .note{margin-top:16px;font-size:11.5px;color:#6b7583;line-height:1.6}
+  .scroll{overflow-x:auto;border-radius:12px}
+  input[type=text]{font:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    padding:9px 11px;color:var(--fg);min-width:300px;flex:1}
+  @media(max-width:760px){.grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Wedge — operator dashboard</h1>
+  <p class="sub">Every swap this frontend completed. Volume and revenue are counted from <code>SUCCESS</code> only — quotes don't count.</p>
+
+  <div class="grid">
+    <div class="kpi"><div class="k">Completed volume</div><div class="v" id="vol">$0</div></div>
+    <div class="kpi"><div class="k">Your fees (bps/2)</div><div class="v ok" id="rev">$0</div></div>
+    <div class="kpi"><div class="k">Swaps</div><div class="v" id="cnt">0</div></div>
+    <div class="kpi"><div class="k">Avg ticket</div><div class="v" id="avg">$0</div></div>
+  </div>
+
+  <div class="bar">
+    <button class="primary" id="sync">Re-verify on-chain status</button>
+    <input id="addr" type="text" placeholder="Track a deposit address manually (0x…)">
+    <button id="add">Track</button>
+    <button id="exp">Export JSON</button>
+  </div>
+
+  <div class="grid" id="byRoute" style="grid-template-columns:repeat(2,1fr);margin-bottom:14px"></div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Route</th><th>Pair</th><th class="num">In</th><th class="num">USD</th>
+        <th class="num">Your fee</th><th>Status</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="empty">No completed swaps yet. Run one through <a href="index.html" style="color:#9fb0c4">the frontend</a>.</div>
+
+  <p class="note">
+    Data lives in this browser's localStorage (this browser only — export to keep records).
+    "Your fee" = volume × feeBps/2, matching the 50/50 split 1Click applies to <code>appFees</code>.
+    Actual accrued balances settle to the fee recipient address; reconcile against
+    <a href="https://explorer.near-intents.org/" target="_blank" rel="noopener" style="color:#9fb0c4">the NEAR Intents explorer</a>.
+  </p>
+</div>
+
+<script>
+const KEY = "wedge_swaps_v1";
+const API = "https://1click.chaindefuser.com";
+const $ = id => document.getElementById(id);
+const money = n => "$" + Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+function load() { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (_) { return []; } }
+function save(rows) { try { localStorage.setItem(KEY, JSON.stringify(rows.slice(-2000))); } catch (_) {} }
+
+function render() {
+  const rows = load().slice().sort((a, b) => b.ts - a.ts);
+  const done = rows.filter(r => r.status === "SUCCESS");
+  const vol = done.reduce((s, r) => s + (Number(r.amountInUsd) || 0), 0);
+  const rev = done.reduce((s, r) => s + (Number(r.amountInUsd) || 0) * ((r.ourBps || 0) / 10000), 0);
+
+  $("vol").textContent = money(vol);
+  $("rev").textContent = money(rev);
+  $("cnt").textContent = done.length;
+  $("avg").textContent = done.length ? money(vol / done.length) : "$0";
+
+  // per-route comparison — the A/B read
+  const byRoute = done.reduce((m, r) => {
+    const k = r.route || "bsc-out";
+    m[k] = m[k] || { n: 0, vol: 0, rev: 0 };
+    m[k].n++; m[k].vol += Number(r.amountInUsd) || 0;
+    m[k].rev += (Number(r.amountInUsd) || 0) * ((r.ourBps || 0) / 10000);
+    return m;
+  }, {});
+  const keys = Object.keys(byRoute);
+  $("byRoute").innerHTML = keys.length ? keys.map(k => `
+    <div class="kpi">
+      <div class="k">${k} · ${byRoute[k].n} swap${byRoute[k].n === 1 ? "" : "s"}</div>
+      <div class="v">${money(byRoute[k].vol)}</div>
+      <div class="k" style="margin-top:6px;text-transform:none;letter-spacing:0">${money(byRoute[k].rev)} fees · avg ticket ${money(byRoute[k].n ? byRoute[k].vol / byRoute[k].n : 0)}</div>
+    </div>`).join("") : "";
+
+  const tb = $("rows");
+  tb.innerHTML = "";
+  $("empty").style.display = rows.length ? "none" : "block";
+
+  rows.forEach(r => {
+    const tr = document.createElement("tr");
+    const fee = (Number(r.amountInUsd) || 0) * ((r.ourBps || 0) / 10000);
+    tr.innerHTML = `
+      <td>${new Date(r.ts).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+      <td>${r.route || "bsc-out"}</td>
+      <td>${r.asset || "—"}</td>
+      <td class="num">${r.amountIn ?? "—"}</td>
+      <td class="num">${r.amountInUsd ? money(r.amountInUsd) : "—"}</td>
+      <td class="num">${fee ? "$" + fee.toFixed(2) : "—"}</td>
+      <td><span class="pill ${r.status === "SUCCESS" ? "" : "bad"}">${r.status}</span></td>`;
+    tb.appendChild(tr);
+  });
+}
+
+$("sync").addEventListener("click", async () => {
+  const btn = $("sync");
+  btn.disabled = true; btn.textContent = "Checking…";
+  const rows = load();
+  let changed = 0;
+  for (const r of rows) {
+    if (!r.depositAddress) continue;
+    try {
+      const d = await (await fetch(`${API}/v0/status?depositAddress=${encodeURIComponent(r.depositAddress)}`)).json();
+      const s = d.swapDetails || {};
+      if (d.status) {
+        if (r.status !== d.status) changed++;
+        r.status = d.status;
+      }
+      if (s.amountInFormatted) r.amountIn = s.amountInFormatted;
+      if (s.amountInUsd) r.amountInUsd = s.amountInUsd;
+      if (s.amountOutFormatted) r.amountOut = s.amountOutFormatted;
+    } catch (_) { /* skip */ }
+  }
+  save(rows); render();
+  btn.disabled = false; btn.textContent = changed ? `Updated ${changed} — re-verify` : "Re-verify on-chain status";
+});
+
+$("add").addEventListener("click", async () => {
+  const a = $("addr").value.trim();
+  if (!a) return;
+  const rows = load();
+  if (rows.some(r => r.depositAddress === a)) { $("addr").value = ""; return; }
+  try {
+    const d = await (await fetch(`${API}/v0/status?depositAddress=${encodeURIComponent(a)}`)).json();
+    const s = d.swapDetails || {};
+    const qr = d.quoteResponse?.quoteRequest || {};
+    rows.push({
+      ts: Date.parse(d.quoteResponse?.timestamp) || Date.now(),
+      depositAddress: a,
+      amountIn: s.amountInFormatted || null,
+      amountInUsd: s.amountInUsd || null,
+      amountOut: s.amountOutFormatted || null,
+      route: qr.referral || "manual",
+      asset: qr.originAsset ? `${(qr.originAsset || "").split(":").pop().slice(0, 10)}→${(qr.destinationAsset || "").split(":").pop().slice(0, 10)}` : "tracked",
+      feeBps: qr.appFees?.reduce((x, f) => x + (f.fee || 0), 0) || 0,
+      ourBps: qr.appFees?.[0]?.fee || 0,
+      status: d.status || "UNKNOWN"
+    });
+    save(rows); render(); $("addr").value = "";
+  } catch (_) { alert("Could not look up that deposit address."); }
+});
+
+$("exp").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(load(), null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `wedge-swaps-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+});
+
+render();
+</script>
+</body>
+</html>

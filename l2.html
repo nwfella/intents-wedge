@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Any-Chain USDC — move USDC between Ethereum, Base, Arbitrum and more</title>
+<meta name="description" content="Move USDC between Ethereum, Base, Arbitrum, Optimism and Polygon in one deposit. No minimum, no bridge approvals, no destination gas. Routed through NEAR Intents.">
+<link rel="stylesheet" href="wedge.css">
+</head>
+<body>
+<div id="app"></div>
+<script>
+window.WEDGE_CONFIG = {
+  id: "any-chain",
+  brand: "Any-Chain USDC",
+  headline: "USDC anywhere, in one deposit.",
+  sub: "Between Ethereum, Base, Arbitrum, Optimism and Polygon. No minimum, no approvals, no gas on the destination chain.",
+  referral: "hermes-wedge-l2",
+  feeBps: 20,
+  recipient: "0x94f080a1BF54d73d565AF55afDC622bABD62CE77",
+  allowOriginSelect: true,
+  origins: [
+    { blockchain: "eth",  label: "Ethereum" },
+    { blockchain: "base", label: "Base" },
+    { blockchain: "arb",  label: "Arbitrum" },
+    { blockchain: "op",   label: "Optimism" },
+    { blockchain: "pol",  label: "Polygon" }
+  ],
+  assets: ["USDC", "USDT"],
+  destinations: [
+    { blockchain: "base", label: "Base" },
+    { blockchain: "arb",  label: "Arbitrum" },
+    { blockchain: "eth",  label: "Ethereum" },
+    { blockchain: "op",   label: "Optimism" },
+    { blockchain: "pol",  label: "Polygon" }
+  ],
+  minHint: "No minimum on these corridors — send any amount."
+};
+</script>
+<script src="wedge-core.js"></script>
+</body>
+</html>
