@@ -187,6 +187,19 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     check(/ZEC/.test(zOut), `receives ${zOut}`);
     check(/^0x[a-fA-F0-9]{40}$/.test(zDep), "deposit address issued on the origin chain");
   }
+  console.log("\n── bridge · RFQ comparison strip ─────────────────");
+  let refOk = false;
+  for (let i = 0; i < 24; i++) {
+    await sleep(500);
+    refOk = await evaluate("(() => { const r = document.getElementById('ref'); return !!r && !r.classList.contains('hidden') && r.querySelectorAll('.chip:not(.off)').length > 0; })()");
+    if (refOk) break;
+  }
+  const chipTxt = await evaluate("Array.from(document.querySelectorAll('#ref .chip')).map(c => c.textContent.trim()).join(' | ')");
+  check(refOk, refOk ? `US venue prices rendered: ${chipTxt}` : "no venue comparison appeared");
+  const headTxt = (await evaluate("(document.querySelector('#ref .refhead') || {}).textContent || ''")).trim();
+  check(/bps/i.test(headTxt), `headline states the gap to mid: "${headTxt}"`);
+  const bestChip = await evaluate("document.querySelectorAll('#ref .chip.best').length");
+  check(bestChip === 1, `exactly one venue highlighted as best (${bestChip})`);
   const bridgeShot = await shot("bridge-zec.png");
 
   console.log("\n── bridge · address validation per chain ─────────");

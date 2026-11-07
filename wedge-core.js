@@ -184,6 +184,7 @@
             <div class="kv"><span class="k">Total cost</span><span class="v" id="costUsd">—</span></div>
             <div class="kv"><span class="k">Est. time</span><span class="v" id="eta">—</span></div>
             <div class="kv"><span class="k">Quote expires</span><span class="v" id="expiry">—</span></div>
+            <div id="ref" class="ref hidden"></div>
 
             <div class="box">
               <div class="k" style="font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">Deposit address</div>
@@ -220,6 +221,7 @@
     $("headline").textContent = CFG.headline;
     $("sub").textContent = CFG.sub;
     $("amtHint").textContent = CFG.minHint || "";
+    if (window.REF_PX) REF_PX.setProxy(CFG.proxyUrl);
     $("feeDisc").textContent = CFG.disclosure ||
       `A ${(CFG.feeBps / 100).toFixed(2)}% service fee supports this page and is included in the all-in cost shown above.`;
 
@@ -365,6 +367,7 @@
     current = null;
     $("quote").classList.remove("on");
     $("status").style.display = "none";
+    const rf = $("ref"); if (rf) { rf.innerHTML = ""; rf.classList.add("hidden"); }
     $("err").classList.add("hidden");
   }
 
@@ -498,7 +501,59 @@
     $("quote").classList.add("on");
     $("err").classList.add("hidden");
     $("quote").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    if (inF > 0 && outF > 0) renderRef(origin, dest, outF / inF);
   }
+
+  /* ── RFQ comparison strip ─────────────────────────────────── */
+  let refSeq = 0;
+
+  async function renderRef(origin, dest, ourRate) {
+    const box = $("ref");
+    if (!box) return;
+    if (!window.REF_PX) { box.classList.add("hidden"); return; }
+
+    const seq = ++refSeq;
+    box.classList.remove("hidden");
+    box.innerHTML = '<div class="refnote">Checking US exchange mid prices…</div>';
+
+    let res;
+    try {
+      res = await REF_PX.compare(origin.symbol, dest.symbol, ourRate);
+    } catch (_) {
+      box.innerHTML = '<div class="refnote">Could not reach the US venues — comparison unavailable.</div>';
+      return;
+    }
+    if (seq !== refSeq) return;
+
+    if (!res.available) {
+      box.innerHTML = `<div class="refnote">No US venue lists both ${esc(origin.symbol)} and ${esc(dest.symbol)} — nothing to price this against.</div>`;
+      return;
+    }
+
+    const b = res.best;
+    const over = b.deltaBps < 0;
+    const head = over
+      ? `You pay <strong>${Math.abs(b.deltaBps).toFixed(0)} bps</strong> over ${esc(b.name)}'s mid`
+      : `Your rate beats ${esc(b.name)}'s mid by <strong>${b.deltaBps.toFixed(0)} bps</strong>`;
+
+    const chips = res.rows.map(r => {
+      if (!r.ok) return `<div class="chip off"><span class="cn">${esc(r.name)}</span><span class="cv">${esc(r.reason)}</span></div>`;
+      const d = r.deltaBps;
+      const cls = r === b ? "chip best" : "chip";
+      const sign = d > 0 ? "+" : "";
+      return `<div class="${cls}" title="1 ${esc(origin.symbol)} = ${r.refRate.toFixed(6)} ${esc(dest.symbol)} at mid">` +
+             `<span class="cn">${esc(r.name)}</span>` +
+             `<span class="cv ${d >= 0 ? "pos" : "neg"}">${sign}${d.toFixed(0)} bps</span></div>`;
+    }).join("");
+
+    box.innerHTML = `
+      <div class="refhead">${head}</div>
+      <div class="refchips">${chips}</div>
+      <div class="refnote">Mid prices sampled now from ${res.available} reachable US venue${res.available === 1 ? "" : "s"}. Green = you beat that venue's mid, amber = you pay over it. On a volatile asset the mid moves, so read the delta alongside the all-in cost above.</div>`;
+  }
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   /* ── status ───────────────────────────────────────────────── */
   const STATUS_COPY = {

@@ -67,3 +67,19 @@ a{color:#9fb0c4}
 .hidden{display:none!important}
 .errbox{margin-top:12px;background:rgba(255,92,92,.09);border:1px solid rgba(255,92,92,.3);color:#ffb3b3;border-radius:10px;padding:11px 13px;font-size:13px}
 @media (max-width:420px){ h1{font-size:22px} }
+
+/* RFQ comparison strip */
+.ref{margin-top:14px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 13px}
+.refhead{font-size:13px;color:#c3ccd8;margin-bottom:10px;line-height:1.45}
+.refhead strong{color:var(--fg);font-family:var(--mono);font-weight:600}
+.refchips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:flex;flex-direction:column;gap:1px;min-width:82px;padding:6px 9px;border-radius:8px;
+  background:rgba(139,149,163,.08);border:1px solid var(--line)}
+.chip .cn{font-size:11px;color:var(--mute);letter-spacing:.02em}
+.chip .cv{font-family:var(--mono);font-size:12px;font-weight:600}
+.chip.best{border-color:#44505f;background:rgba(255,255,255,.035)}
+.chip .cv.pos{color:var(--ok)}
+.chip .cv.neg{color:#ff9f43}
+.chip.off{opacity:.5}
+.chip.off .cv{font-size:10.5px;color:var(--mute);font-weight:500}
+.refnote{margin-top:9px;font-size:11px;color:#6b7583;line-height:1.5}

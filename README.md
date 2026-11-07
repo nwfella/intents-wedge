@@ -103,6 +103,54 @@ sense — solvers post inventory they must honour, and quotes are signed by the 
 you need trustless, that is a different architecture (atomic swaps or a light client), and
 this rail is not it. Don't put "trustless" in the marketing copy.
 
+## RFQ comparison strip
+
+Every quote is priced against the mid of the US-regulated venues that list both sides of the
+trade. This turns "0.44% is a good rate" into a number the user can check.
+
+### Venue reachability (measured 2026-11-07)
+
+Whether a venue has a public price and whether a *browser* may read it are different questions,
+decided by `Access-Control-Allow-Origin`. **Sample each venue more than once** — Coinbase and
+Gemini returned no CORS header on first contact and `*` / reflected origin on every subsequent
+request, so a single probe would have wrongly excluded both.
+
+| Venue | Public price | CORS | Status in the strip |
+|---|---|---|---|
+| Coinbase | ✅ | `*` | direct |
+| Kraken | ✅ | reflects origin | direct |
+| Gemini | ✅ | reflects origin | direct |
+| Binance.US | ✅ | `*` | direct |
+| Bitstamp | ✅ | `*` (1 in 4 samples absent) | direct, tolerated flake |
+| Crypto.com | ✅ | reflects origin | direct |
+| bitFlyer US | ✅ | **none** | proxy only (`worker.js /ref`) |
+| Bullish | 403 to non-browser clients | — | omitted |
+
+So the strip runs fully static for six venues. Only bitFlyer needs the Worker.
+
+### What the number means
+
+```
+refRate  = price(origin, USD) / price(dest, USD)        # units of dest per unit of origin
+deltaBps = (ourRate / refRate - 1) * 10000
+```
+
+Negative = the user receives less than that venue's mid, i.e. it is a **cost**. Positive = they
+beat that venue's mid. The chips colour by sign — amber for over mid, green for under — and the
+"best" venue gets a neutral border, not a green one, because being closest to mid while still
+over it is not a win.
+
+Two honest caveats, both stated in the UI:
+
+- **The mid is sampled now, the quote was struck seconds ago.** On an asset that moves 1% in a
+  minute, the delta can exceed the fee. A price comparison is not a settlement guarantee.
+- **USDT pairs are converted to USD.** Binance.US and Kraken quote many pairs in USDT; treating
+  that as $1 would silently add a few bps of error to every comparison.
+
+USDC → ZEC typically lands 80–120 bps over mid across the four ZEC-listing venues, of which
+20 bps is the fee. That gap is solver spread, and it is the number that determines whether this
+rail is competitive for a given pair.
+
 ## Verified live behaviour
 
 | Fact | Value |
