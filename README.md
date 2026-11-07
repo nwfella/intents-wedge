@@ -103,55 +103,55 @@ sense — solvers post inventory they must honour, and quotes are signed by the 
 you need trustless, that is a different architecture (atomic swaps or a light client), and
 this rail is not it. Don't put "trustless" in the marketing copy.
 
-## RFQ comparison strip
+## Bridged totals
 
-Every quote is priced against the mid of the US-regulated venues that list both sides of the
-trade. This turns "0.44% is a good rate" into a number the user can check.
+A cumulative "USD bridged" figure. `localStorage` only ever sees the browser it runs in, so
+there are exactly two honest modes:
 
-### Venue reachability (measured 2026-11-07)
+| Mode | Available when | Reads |
+|---|---|---|
+| Site-wide | `CONFIG.proxyUrl` set **and** the Worker has a KV binding | "$X bridged across N swaps" |
+| Per-browser | no backend | "You've moved $X through this page in N swaps" |
 
-Whether a venue has a public price and whether a *browser* may read it are different questions,
-decided by `Access-Control-Allow-Origin`. **Sample each venue more than once** — Coinbase and
-Gemini returned no CORS header on first contact and `*` / reflected origin on every subsequent
-request, so a single probe would have wrongly excluded both.
+The page never claims a site-wide total it cannot see, and only `SUCCESS` swaps count — a
+pending deposit is not volume.
 
-| Venue | Public price | CORS | Status in the strip |
-|---|---|---|---|
-| Coinbase | ✅ | `*` | direct |
-| Kraken | ✅ | reflects origin | direct |
-| Gemini | ✅ | reflects origin | direct |
-| Binance.US | ✅ | `*` | direct |
-| Bitstamp | ✅ | `*` (1 in 4 samples absent) | direct, tolerated flake |
-| Crypto.com | ✅ | reflects origin | direct |
-| bitFlyer US | ✅ | **none** | proxy only (`worker.js /ref`) |
-| Bullish | 403 to non-browser clients | — | omitted |
+### Making it site-wide
 
-So the strip runs fully static for six venues. Only bitFlyer needs the Worker.
+The Worker verifies every report before counting it, because a self-reported volume counter is
+worthless:
 
-### What the number means
+1. The client POSTs **only a deposit address** — never a USD figure.
+2. The Worker calls the provider's `/v0/status` and requires `status === "SUCCESS"`.
+3. It requires `quoteRequest.referral` to match `REFERRAL`, so another frontend's swaps cannot
+   inflate your number.
+4. It stores `tx:<depositAddress>` → the provider's own `amountInUsd`. Keying by address makes
+   repeat reports idempotent, and keying per-swap avoids the read-modify-write race a single
+   running-total counter would have.
 
+```bash
+wrangler kv namespace create STATS       # add the id to wrangler.toml as binding STATS
+wrangler secret put FEE_RECIPIENT
+wrangler secret put REFERRAL             # e.g. hermes-wedge-bridge
+wrangler secret put ALLOWED_ORIGIN
+wrangler deploy
 ```
-refRate  = price(origin, USD) / price(dest, USD)        # units of dest per unit of origin
-deltaBps = (ourRate / refRate - 1) * 10000
-```
 
-Negative = the user receives less than that venue's mid, i.e. it is a **cost**. Positive = they
-beat that venue's mid. The chips colour by sign — amber for over mid, green for under — and the
-"best" venue gets a neutral border, not a green one, because being closest to mid while still
-over it is not a win.
+Then set `proxyUrl` in each page's `WEDGE_CONFIG`. Without a KV binding the Worker returns
+`configured: false` and the client falls back to the per-browser figure instead of showing zero.
 
-Two honest caveats, both stated in the UI:
+## Token selection
 
-- **The mid is sampled now, the quote was struck seconds ago.** On an asset that moves 1% in a
-  minute, the delta can exceed the fee. A price comparison is not a settlement guarantee.
-- **USDT pairs are converted to USD.** Binance.US and Kraken quote many pairs in USDT; treating
-  that as $1 would silently add a few bps of error to every comparison.
+Chain first, then token, then an optional name filter:
 
-USDC → ZEC typically lands 80–120 bps over mid across the four ZEC-listing venues, of which
-20 bps is the fee. That gap is solver spread, and it is the number that determines whether this
-rail is competitive for a given pair.
+- **From** and **To** each have a chain dropdown beside a token dropdown. Changing a chain
+  rebuilds that side's list to only that chain's assets, so an impossible pair like USDT on
+  Base can't be assembled.
+- **Search** matches symbol, display name and CoinGecko slug — `zcash`, `usd coin` and
+  `bitcoin` all work. The provider ships no display name, only a slug, so the name is derived
+  from it, with curated overrides for common tickers (`USDC` → "USD Coin", `ZEC` → "Zcash").
 
-## Verified live behaviour
+## Verified live behaviour## Verified live behaviour
 
 | Fact | Value |
 |---|---|

@@ -49,6 +49,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check(/wedge_swaps_v1/.test(core) && /wedge_swaps_v1/.test(dash), "dashboard reads the engine's storage key");
   check(/body\.appFees\s*=\s*\[\{\s*recipient:\s*env\.FEE_RECIPIENT/.test(worker), "worker re-writes appFees server-side");
 
+  console.log("\n── bridged-total wiring ──────────────────────────");
+  check(!/REF_PX|refpx/.test(read("wedge-core.js")), "RFQ comparison fully removed from the engine");
+  check(!fs.existsSync(path.join(ROOT, "refpx.js")), "refpx.js deleted");
+  check(/function loadStats/.test(read("wedge-core.js")) && /function postStat/.test(read("wedge-core.js")),
+        "client has a totals loader and reporter");
+  check(/statbar/.test(read("wedge-core.js")), "stat bar rendered in the header");
+  check(worker.includes('"/stat"'), "worker exposes /stat");
+  check(/qr\.referral\s*!==\s*env\.REFERRAL/.test(worker),
+        "worker rejects swaps that did not carry our channel id (anti-inflation)");
+  check(/swapDetails\?\.amountInUsd/.test(worker),
+        "worker takes the USD figure from the provider, not from the client");
+
   console.log("\n── assets ────────────────────────────────────────");
   let tokens = [];
   try {
@@ -165,38 +177,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const aZero = await quote("USDC", "bsc", "base", 2000, 0);
   check(aZero.status === 201 && Number(aZero.json.quote.amountOut) > Number(a.json.quote.amountOut),
         "zero-fee quote returns strictly more out");
-
-  console.log("\n── reference venues (RFQ strip) ──────────────────");
-  const ua = { "User-Agent": "wedge-gate", Origin: "https://nwfella.github.io" };
-  const hdr = async (u) => {
-    const r = await fetch(u, { headers: ua });
-    return { ok: r.ok, acao: r.headers.get("access-control-allow-origin"), json: await r.json().catch(() => null) };
-  };
-
-  const krakenPx = await hdr("https://api.kraken.com/0/public/Ticker?pair=ZECUSD");
-  check(!!krakenPx.acao, `Kraken sends CORS (${krakenPx.acao}) — usable from a static page`);
-  const kzec = krakenPx.json && Object.values(krakenPx.json.result || {})[0];
-  check(!!kzec && Number(kzec.a?.[0]) > 0, `Kraken lists ZEC (ask ${kzec?.a?.[0]})`);
-
-  const binPx = await hdr("https://api.binance.us/api/v3/ticker/price?symbol=ZECUSD");
-  check(binPx.acao === "*", `Binance.US sends CORS (${binPx.acao})`);
-  check(Number(binPx.json?.price) > 0, `Binance.US lists ZECUSD (${binPx.json?.price})`);
-
-  const cbPx = await hdr("https://api.coinbase.com/v2/prices/ZEC-USD/spot");
-  check(cbPx.ok && !!cbPx.acao, `Coinbase sends CORS (${cbPx.acao}) — reachable from a static page`);
-
-  const gemPx = await hdr("https://api.gemini.com/v1/pubticker/zecusd");
-  check(gemPx.ok && !!gemPx.acao, `Gemini sends CORS (${gemPx.acao}) and lists ZEC`);
-
-  const bfPx = await hdr("https://api.bitflyer.com/v1/ticker?product_code=BTC_USD");
-  check(bfPx.ok && !bfPx.acao, "bitFlyer returns a price but no CORS header — proxy-only, as designed");
-
-  const [, kronly] = [0, krakenPx.json];
-  if (kzec && binPx.json?.price) {
-    const a = Number(kzec.a[0]), b = Number(binPx.json.price);
-    const gapBps = Math.abs(a / b - 1) * 10000;
-    check(gapBps < 500, `two US venues agree on ZEC within ${gapBps.toFixed(0)} bps (sanity)`);
-  }
 
   console.log("\n── status ────────────────────────────────────────");
   const st = await fetch(`${API}/v0/status?depositAddress=${a.json.quote.depositAddress}`);

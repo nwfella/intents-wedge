@@ -89,14 +89,50 @@ export default {
         });
       }
 
-      if (url.pathname === "/ref" && request.method === "GET") {
-        const venue = (url.searchParams.get("venue") || "").toLowerCase();
-        const sym = (url.searchParams.get("symbol") || "").toUpperCase();
-        if (!/^[A-Z0-9]{2,10}$/.test(sym)) return json({ usd: null }, 400, cors);
-        const usd = await refPrice(venue, sym);
-        return new Response(JSON.stringify({ venue, symbol: sym, usd }), {
+      /* ── site-wide bridged total ──────────────────────────────
+       * A browser's localStorage can only see its own swaps, so a real
+       * "total bridged" figure needs server state. Counts are keyed by
+       * deposit address, which makes them idempotent, and they are verified
+       * against the provider before being stored.
+       */
+      if (url.pathname === "/stat" && request.method === "GET") {
+        const s = await totals(env);
+        return new Response(JSON.stringify(s), {
           status: 200,
-          headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "public, max-age=30" },
+          headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "public, max-age=20" },
+        });
+      }
+
+      if (url.pathname === "/stat" && request.method === "POST") {
+        const { depositAddress } = await request.json().catch(() => ({}));
+        if (!depositAddress) return json({ message: "depositAddress required" }, 400, cors);
+        if (!env.STATS) return json({ message: "KV not bound" }, 501, cors);
+
+        const key = `tx:${depositAddress}`;
+        if (await env.STATS.get(key)) return new Response(JSON.stringify(await totals(env)), {
+          status: 200, headers: { ...cors, "Content-Type": "application/json" },
+        });
+
+        // Never trust the client: ask the provider, and require the swap to
+        // carry our channel id so someone else's flow cannot inflate the count.
+        const r = await fetch(`${UPSTREAM}/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`, {
+          headers: env.ONECLICK_API_KEY ? { "X-API-Key": env.ONECLICK_API_KEY } : {},
+        });
+        if (!r.ok) return json({ message: "unknown deposit address" }, 400, cors);
+        const st = await r.json();
+        const qr = st.quoteResponse?.quoteRequest || {};
+        if (st.status !== "SUCCESS") return json({ message: "not settled", status: st.status }, 409, cors);
+        if (env.REFERRAL && qr.referral && qr.referral !== env.REFERRAL) {
+          return json({ message: "not our channel" }, 403, cors);
+        }
+
+        await env.STATS.put(key, JSON.stringify({
+          usd: Number(st.swapDetails?.amountInUsd) || 0,
+          ts: Date.now(),
+          route: qr.referral || null,
+        }));
+        return new Response(JSON.stringify(await totals(env)), {
+          status: 200, headers: { ...cors, "Content-Type": "application/json" },
         });
       }
 
@@ -107,41 +143,16 @@ export default {
   },
 };
 
-const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
-
-/**
- * The venues the browser cannot reach itself: Coinbase, Gemini and Bitstamp all
- * serve public prices without an Access-Control-Allow-Origin header.
- */
-async function refPrice(venue, sym) {
-  const lower = sym.toLowerCase();
-  try {
-    if (venue === "coinbase") {
-      const r = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`);
-      if (!r.ok) return null;
-      return num((await r.json())?.data?.amount);
-    }
-    if (venue === "gemini") {
-      const r = await fetch(`https://api.gemini.com/v1/pubticker/${lower}usd`);
-      if (!r.ok) return null;
-      const j = await r.json();
-      const b = num(j.bid), a = num(j.ask);
-      return b && a ? (b + a) / 2 : (num(j.last) || null);
-    }
-    if (venue === "bitflyer") {
-      const r = await fetch(`https://api.bitflyer.com/v1/ticker?product_code=${sym}_USD`);
-      if (!r.ok) return null;
-      return num((await r.json()).ltp);
-    }
-    if (venue === "bitstamp") {
-      const r = await fetch(`https://www.bitstamp.net/api/v2/ticker/${lower}usd/`);
-      if (!r.ok) return null;
-      const j = await r.json();
-      const b = num(j.bid), a = num(j.ask);
-      return b && a ? (b + a) / 2 : (num(j.last) || null);
-    }
-  } catch (_) { /* unlisted or unreachable */ }
-  return null;
+async function totals(env) {
+  if (!env.STATS) return { usd: null, count: 0, configured: false };
+  let cursor, usd = 0, count = 0;
+  do {
+    const page = await env.STATS.list({ prefix: "tx:", cursor });
+    const vals = await Promise.all(page.keys.map(k => env.STATS.get(k.name, "json")));
+    for (const v of vals) { if (v) { usd += Number(v.usd) || 0; count++; } }
+    cursor = page.list_complete ? null : page.cursor;
+  } while (cursor);
+  return { usd, count, configured: true };
 }
 
 function json(obj, status, headers) {

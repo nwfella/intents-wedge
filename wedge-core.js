@@ -131,10 +131,16 @@
   }
 
   function bridgeForm() {
+    const search = (id) =>
+      `<input id="${id}" type="search" class="search" placeholder="Search by name or symbol — zcash, usd coin, bitcoin" autocomplete="off">`;
     return `
       <div class="field">
-        <label for="fromToken">From</label>
-        <select id="fromToken"></select>
+        <label>From</label>
+        <div class="pickrow">
+          <select id="fromChain" aria-label="Origin chain"></select>
+          <select id="fromToken" aria-label="Origin token"></select>
+        </div>
+        ${search("fromSearch")}
       </div>
       <div class="field">
         <label for="amount">Amount</label>
@@ -142,8 +148,12 @@
         <div class="hint" id="amtHint"></div>
       </div>
       <div class="field">
-        <label for="toToken">To</label>
-        <select id="toToken"></select>
+        <label>To</label>
+        <div class="pickrow">
+          <select id="toChain" aria-label="Destination chain"></select>
+          <select id="toToken" aria-label="Destination token"></select>
+        </div>
+        ${search("toSearch")}
       </div>`;
   }
 
@@ -154,6 +164,7 @@
           <div class="brand"><span class="dot"></span><span id="brand"></span></div>
           <h1 id="headline"></h1>
           <p class="sub" id="sub"></p>
+          <div class="statbar" id="statbar" hidden><span class="statdot"></span><span id="statText"></span></div>
         </header>
 
         <div class="card">
@@ -184,7 +195,6 @@
             <div class="kv"><span class="k">Total cost</span><span class="v" id="costUsd">—</span></div>
             <div class="kv"><span class="k">Est. time</span><span class="v" id="eta">—</span></div>
             <div class="kv"><span class="k">Quote expires</span><span class="v" id="expiry">—</span></div>
-            <div id="ref" class="ref hidden"></div>
 
             <div class="box">
               <div class="k" style="font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">Deposit address</div>
@@ -221,7 +231,7 @@
     $("headline").textContent = CFG.headline;
     $("sub").textContent = CFG.sub;
     $("amtHint").textContent = CFG.minHint || "";
-    if (window.REF_PX) REF_PX.setProxy(CFG.proxyUrl);
+    loadStats();
     $("feeDisc").textContent = CFG.disclosure ||
       `A ${(CFG.feeBps / 100).toFixed(2)}% service fee supports this page and is included in the all-in cost shown above.`;
 
@@ -252,23 +262,51 @@
     return head.concat(tail);
   }
 
-  function fillTokenSelect(sel, selectedAssetId) {
+  // The provider ships no display name — only a CoinGecko slug — so derive one.
+  // Searching matches symbol, derived name and slug, which is what people type.
+  const NAMES = {
+    USDC: "USD Coin", USDT: "Tether", BTC: "Bitcoin", ETH: "Ether", ZEC: "Zcash",
+    SOL: "Solana", BNB: "BNB", AVAX: "Avalanche", POL: "Polygon", ARB: "Arbitrum",
+    OP: "Optimism", NEAR: "NEAR", SUI: "Sui", APT: "Aptos", DOGE: "Dogecoin",
+    XRP: "XRP", ADA: "Cardano", LTC: "Litecoin", BCH: "Bitcoin Cash", DASH: "Dash",
+    XLM: "Stellar", TON: "Toncoin", TRX: "TRON", ATOM: "Cosmos", LINK: "Chainlink",
+    UNI: "Uniswap", AAVE: "Aave", DAI: "Dai", WBTC: "Wrapped Bitcoin"
+  };
+  function displayName(t) {
+    if (NAMES[t.symbol]) return NAMES[t.symbol];
+    const slug = t.coingeckoId || "";
+    if (!slug) return t.symbol;
+    return slug.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+  function matchToken(t, q) {
+    if (!q) return true;
+    const hay = `${t.symbol} ${displayName(t)} ${t.coingeckoId || ""}`.toLowerCase();
+    return q.toLowerCase().split(/\s+/).filter(Boolean).every(part => hay.includes(part));
+  }
+
+  function fillChainSelect(sel, def) {
+    const chains = orderedChains();
     sel.innerHTML = "";
-    orderedChains().forEach(chain => {
-      const group = el("optgroup");
-      group.label = chainName(chain);
-      (TOKENS || [])
-        .filter(t => t.blockchain === chain)
-        .sort((a, b) => a.symbol.localeCompare(b.symbol))
-        .forEach(t => {
-          const o = el("option");
-          o.value = t.assetId;
-          o.textContent = `${t.symbol} · ${chainName(t.blockchain)}`;
-          group.appendChild(o);
-        });
-      if (group.children.length) sel.appendChild(group);
+    chains.forEach(c => { const o = el("option"); o.value = c; o.textContent = chainName(c); sel.appendChild(o); });
+    if (def && chains.includes(def)) sel.value = def;
+  }
+
+  function fillTokenSelect(sel, chain, wantSymbol, query) {
+    const prev = sel.value;
+    const list = (TOKENS || [])
+      .filter(t => t.blockchain === chain && matchToken(t, query))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+    sel.innerHTML = "";
+    list.forEach(t => {
+      const o = el("option");
+      o.value = t.assetId;
+      o.textContent = `${t.symbol} · ${displayName(t)}`;
+      sel.appendChild(o);
     });
-    if (selectedAssetId && [...sel.options].some(o => o.value === selectedAssetId)) sel.value = selectedAssetId;
+    const want = wantSymbol ? list.find(t => t.symbol === wantSymbol) : null;
+    if (want) sel.value = want.assetId;
+    else if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    return list.length;
   }
 
   function tokenByAssetId(id) {
@@ -276,14 +314,14 @@
   }
 
   function bootBridge() {
-    const first = CFG.defaultFrom || "USDC";
-    const to = CFG.defaultTo || "ZEC";
-    const findId = (sym, chain) => {
-      const t = (TOKENS || []).find(x => x.symbol === sym && x.blockchain === chain);
-      return t ? t.assetId : null;
-    };
-    fillTokenSelect($("fromToken"), findId(first, CFG.defaultFromChain || "base"));
-    fillTokenSelect($("toToken"), findId(to, CFG.defaultToChain || "zec"));
+    fillChainSelect($("fromChain"), CFG.defaultFromChain || "base");
+    fillChainSelect($("toChain"), CFG.defaultToChain || "zec");
+
+    const refill = (side, wantSymbol) =>
+      fillTokenSelect($(side + "Token"), $(side + "Chain").value, wantSymbol, $(side + "Search").value.trim());
+
+    refill("from", CFG.defaultFrom || "USDC");
+    refill("to", CFG.defaultTo || "ZEC");
 
     const sync = () => {
       const o = tokenByAssetId($("fromToken").value);
@@ -301,8 +339,12 @@
       }
       if (current) resetQuote();
     };
-    $("fromToken").addEventListener("change", sync);
-    $("toToken").addEventListener("change", sync);
+    // chain first: changing a chain rebuilds that side's token list
+    ["from", "to"].forEach(side => {
+      $(side + "Chain").addEventListener("change", () => { refill(side); sync(); });
+      $(side + "Token").addEventListener("change", sync);
+      $(side + "Search").addEventListener("input", () => { refill(side); sync(); });
+    });
     sync();
   }
 
@@ -367,7 +409,6 @@
     current = null;
     $("quote").classList.remove("on");
     $("status").style.display = "none";
-    const rf = $("ref"); if (rf) { rf.innerHTML = ""; rf.classList.add("hidden"); }
     $("err").classList.add("hidden");
   }
 
@@ -502,58 +543,7 @@
     $("err").classList.add("hidden");
     $("quote").scrollIntoView({ behavior: "smooth", block: "nearest" });
 
-    if (inF > 0 && outF > 0) renderRef(origin, dest, outF / inF);
   }
-
-  /* ── RFQ comparison strip ─────────────────────────────────── */
-  let refSeq = 0;
-
-  async function renderRef(origin, dest, ourRate) {
-    const box = $("ref");
-    if (!box) return;
-    if (!window.REF_PX) { box.classList.add("hidden"); return; }
-
-    const seq = ++refSeq;
-    box.classList.remove("hidden");
-    box.innerHTML = '<div class="refnote">Checking US exchange mid prices…</div>';
-
-    let res;
-    try {
-      res = await REF_PX.compare(origin.symbol, dest.symbol, ourRate);
-    } catch (_) {
-      box.innerHTML = '<div class="refnote">Could not reach the US venues — comparison unavailable.</div>';
-      return;
-    }
-    if (seq !== refSeq) return;
-
-    if (!res.available) {
-      box.innerHTML = `<div class="refnote">No US venue lists both ${esc(origin.symbol)} and ${esc(dest.symbol)} — nothing to price this against.</div>`;
-      return;
-    }
-
-    const b = res.best;
-    const over = b.deltaBps < 0;
-    const head = over
-      ? `You pay <strong>${Math.abs(b.deltaBps).toFixed(0)} bps</strong> over ${esc(b.name)}'s mid`
-      : `Your rate beats ${esc(b.name)}'s mid by <strong>${b.deltaBps.toFixed(0)} bps</strong>`;
-
-    const chips = res.rows.map(r => {
-      if (!r.ok) return `<div class="chip off"><span class="cn">${esc(r.name)}</span><span class="cv">${esc(r.reason)}</span></div>`;
-      const d = r.deltaBps;
-      const cls = r === b ? "chip best" : "chip";
-      const sign = d > 0 ? "+" : "";
-      return `<div class="${cls}" title="1 ${esc(origin.symbol)} = ${r.refRate.toFixed(6)} ${esc(dest.symbol)} at mid">` +
-             `<span class="cn">${esc(r.name)}</span>` +
-             `<span class="cv ${d >= 0 ? "pos" : "neg"}">${sign}${d.toFixed(0)} bps</span></div>`;
-    }).join("");
-
-    box.innerHTML = `
-      <div class="refhead">${head}</div>
-      <div class="refchips">${chips}</div>
-      <div class="refnote">Mid prices sampled now from ${res.available} reachable US venue${res.available === 1 ? "" : "s"}. Green = you beat that venue's mid, amber = you pay over it. On a volatile asset the mid moves, so read the delta alongside the all-in cost above.</div>`;
-  }
-
-  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   /* ── status ───────────────────────────────────────────────── */
   const STATUS_COPY = {
@@ -589,6 +579,7 @@
           clearInterval(polling); polling = null;
           $("spin").style.display = "none";
           logSuccess(d);
+          postStat().then(loadStats);
         }
         if (["REFUNDED", "FAILED", "INCOMPLETE_DEPOSIT"].includes(d.status)) {
           clearInterval(polling); polling = null;
@@ -606,6 +597,50 @@
     $("statusText").textContent = text;
     const p = $("statusPill");
     p.textContent = code; p.className = "pill " + cls;
+  }
+
+  /* ── bridged totals ───────────────────────────────────────── */
+  // localStorage only ever sees this browser's swaps. The site-wide figure
+  // comes from the Worker; without it we say "you" rather than "we", because
+  // claiming a site total we cannot see would be a fabrication.
+  function localTotals() {
+    try {
+      const rows = JSON.parse(localStorage.getItem("wedge_swaps_v1") || "[]").filter(r => r.status === "SUCCESS");
+      return { usd: rows.reduce((s, r) => s + (Number(r.amountInUsd) || 0), 0), count: rows.length };
+    } catch (_) { return { usd: 0, count: 0 }; }
+  }
+
+  async function loadStats() {
+    const box = $("statbar"); if (!box) return;
+
+    if (CFG.proxyUrl) {
+      try {
+        const d = await (await fetch(`${CFG.proxyUrl}/stat`)).json();
+        if (d && d.configured !== false && Number.isFinite(Number(d.usd))) {
+          const n = Number(d.count) || 0;
+          box.hidden = false;
+          $("statText").innerHTML = `<strong>$${fmt(Number(d.usd), 0)}</strong> bridged across <strong>${n}</strong> swap${n === 1 ? "" : "s"}`;
+          return;
+        }
+      } catch (_) { /* fall back to the local log */ }
+    }
+
+    const t = localTotals();
+    if (t.count > 0) {
+      box.hidden = false;
+      $("statText").innerHTML = `You've moved <strong>$${fmt(t.usd, 0)}</strong> through this page in ${t.count} swap${t.count === 1 ? "" : "s"}`;
+    }
+  }
+
+  async function postStat() {
+    if (!CFG.proxyUrl || !current) return;
+    try {
+      await fetch(`${CFG.proxyUrl}/stat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ depositAddress: current.depositAddress }),
+      });
+    } catch (_) { /* non-fatal: the swap itself already succeeded */ }
   }
 
   /* ── logging ──────────────────────────────────────────────── */

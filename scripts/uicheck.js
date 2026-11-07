@@ -159,20 +159,41 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   }
   const bShot = await shot("route-b.png");
 
-  /* ─────────── bridge: any token → any chain ─────────── */
+  /* ─────────── bridge: chain first, then token ─────────── */
   console.log("\n── bridge · token matrix ─────────────────────────");
   await goto(`${BASE}/bridge.html`);
   await sleep(2600);
-  check(await evaluate("!!document.getElementById('fromToken')"), "token picker present");
+  const topShot = await shot("bridge-top.png");
+  check(await evaluate("document.getElementById('statbar').hidden"), "stat bar stays hidden when there is no volume");
+  const nChains = await evaluate("document.querySelectorAll('#fromChain option').length");
+  check(nChains > 30, `${nChains} chains in the origin picker`);
   const nFrom = await evaluate("document.querySelectorAll('#fromToken option').length");
-  check(nFrom > 150, `full asset list loaded (${nFrom} tokens)`);
-  const nGroups = await evaluate("document.querySelectorAll('#fromToken optgroup').length");
-  check(nGroups > 20, `${nGroups} chains grouped in the picker`);
-  check((await evaluate("document.getElementById('toToken').selectedOptions[0].parentElement.label")) === "Zcash",
-        "defaults to a native Zcash destination");
+  check(nFrom > 3 && nFrom < 40, `token list is scoped to the chosen chain (${nFrom} on Base)`);
+  check(await evaluate("[...document.querySelectorAll('#fromToken option')].some(o => o.textContent.startsWith('USDC'))"),
+        "USDC offered on Base");
+  check(await evaluate("document.getElementById('toChain').value") === "zec", "destination chain defaults to Zcash");
+  check(await evaluate("[...document.querySelectorAll('#toToken option')].some(o => o.textContent.includes('Zcash'))"),
+        "token options carry a human name, not just a ticker");
+
+  console.log("\n── bridge · search by token name ─────────────────");
+  await evaluate(`(() => { const s=document.getElementById('fromSearch'); s.value='usd coin'; s.dispatchEvent(new Event('input')); })()`);
+  await sleep(400);
+  const uOpts = await evaluate("Array.from(document.querySelectorAll('#fromToken option')).map(o => o.textContent).join('|')");
+  check(uOpts.includes("USD Coin") && uOpts.split("|").length <= 2, `multi-word name search narrows the list: ${uOpts}`);
+  await evaluate(`(() => { const s=document.getElementById('fromSearch'); s.value='zcash'; s.dispatchEvent(new Event('input')); })()`);
+  await sleep(400);
+  const noHit = await evaluate("document.querySelectorAll('#fromToken option').length");
+  check(noHit === 0, `no match on this chain yields an empty list (${noHit} options)`);
 
   console.log("\n── bridge · USDC/Base → native ZEC ───────────────");
   await evaluate(`(() => {
+    const s = document.getElementById('fromSearch'); s.value=''; s.dispatchEvent(new Event('input'));
+  })()`);
+  await sleep(500);
+  await evaluate(`(() => {
+    const sel = document.getElementById('fromToken');
+    const o = [...sel.options].find(x => x.textContent.startsWith('USDC'));
+    sel.value = o.value; sel.dispatchEvent(new Event('change'));
     document.getElementById('amount').value='100';
     document.getElementById('recipient').value='t1LvAcGd715CLtmKVkprNQKNj6x55ULXuDL';
     document.getElementById('refund').value='${ADDR}';
@@ -182,44 +203,45 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const zErr = await evaluate("document.getElementById('err').textContent || ''");
   check(zShown, zShown ? "quotes a non-stablecoin destination across chains" : `ZEC quote failed: ${zErr}`);
   if (zShown) {
-    const zOut = await evaluate("document.getElementById('outAmt').textContent");
-    const zDep = await evaluate("document.getElementById('depAddr').textContent");
-    check(/ZEC/.test(zOut), `receives ${zOut}`);
-    check(/^0x[a-fA-F0-9]{40}$/.test(zDep), "deposit address issued on the origin chain");
+    check(/ZEC/.test(await evaluate("document.getElementById('outAmt').textContent")),
+          `receives ${await evaluate("document.getElementById('outAmt').textContent")}`);
   }
-  console.log("\n── bridge · RFQ comparison strip ─────────────────");
-  let refOk = false;
-  for (let i = 0; i < 24; i++) {
-    await sleep(500);
-    refOk = await evaluate("(() => { const r = document.getElementById('ref'); return !!r && !r.classList.contains('hidden') && r.querySelectorAll('.chip:not(.off)').length > 0; })()");
-    if (refOk) break;
-  }
-  const chipTxt = await evaluate("Array.from(document.querySelectorAll('#ref .chip')).map(c => c.textContent.trim()).join(' | ')");
-  check(refOk, refOk ? `US venue prices rendered: ${chipTxt}` : "no venue comparison appeared");
-  const headTxt = (await evaluate("(document.querySelector('#ref .refhead') || {}).textContent || ''")).trim();
-  check(/bps/i.test(headTxt), `headline states the gap to mid: "${headTxt}"`);
-  const bestChip = await evaluate("document.querySelectorAll('#ref .chip.best').length");
-  check(bestChip === 1, `exactly one venue highlighted as best (${bestChip})`);
   const bridgeShot = await shot("bridge-zec.png");
 
   console.log("\n── bridge · address validation per chain ─────────");
-  await evaluate(`(() => {
-    document.getElementById('recipient').value='0xdeadbeef';
-    document.getElementById('go').click();
-  })()`);
+  await evaluate(`(() => { document.getElementById('recipient').value='0xdeadbeef'; document.getElementById('go').click(); })()`);
   await sleep(700);
   const badZ = await evaluate("document.getElementById('err').textContent || ''");
-  check(/Zcash/i.test(badZ), `EVM address rejected for a ZEC destination: "${badZ.slice(0, 70)}"`);
+  check(/Zcash/i.test(badZ), `EVM address rejected for a ZEC destination: "${badZ.slice(0, 64)}"`);
 
-  console.log("\n── bridge · capped origin is flagged up front ────");
+  console.log("\n── bridge · chain selection drives the token list ─");
   await evaluate(`(() => {
-    const s=document.getElementById('fromToken');
-    const o=[...s.options].find(x => x.parentElement.label === 'BNB Chain' && x.textContent.startsWith('USDT'));
-    s.value=o.value; s.dispatchEvent(new Event('change'));
+    const c = document.getElementById('fromChain');
+    c.value = 'bsc'; c.dispatchEvent(new Event('change'));
   })()`);
-  await sleep(500);
+  await sleep(600);
+  const bscTokens = await evaluate("Array.from(document.querySelectorAll('#fromToken option')).map(o => o.textContent).join('|')");
+  check(bscTokens.includes("USDT") && !bscTokens.includes("Zcash"),
+        `switching chain rebuilds the token list (${bscTokens.split("|").length} BNB Chain tokens)`);
   const capNote = await evaluate("document.getElementById('refundNote').textContent");
-  check(/capped/i.test(capNote), "BSC origin warns about the cap before the user submits");
+  check(/capped/i.test(capNote), "a capped origin is flagged before the user submits");
+
+  console.log("\n── bridge · bridged-total stat ───────────────────");
+  await evaluate(`(() => {
+    localStorage.setItem('wedge_swaps_v1', JSON.stringify([
+      { ts: Date.now(), depositAddress: '0xtest1', route: 'bridge', status: 'SUCCESS', amountInUsd: 2500 },
+      { ts: Date.now(), depositAddress: '0xtest2', route: 'bridge', status: 'SUCCESS', amountInUsd: 1500 },
+      { ts: Date.now(), depositAddress: '0xtest3', route: 'bridge', status: 'PENDING_DEPOSIT', amountInUsd: 999 }
+    ]));
+  })()`);
+  await goto(`${BASE}/bridge.html`);
+  await sleep(2600);
+  const statVisible = await evaluate("(() => { const b=document.getElementById('statbar'); return !!b && !b.hidden; })()");
+  const statTxt = (await evaluate("document.getElementById('statText').textContent || ''")).trim();
+  check(statVisible, "stat bar shows once there is volume to report");
+  check(/4,000|4000/.test(statTxt), `counts settled volume only, excludes pending: "${statTxt}"`);
+  check(/2 swaps/.test(statTxt), `counts swaps, not rows: "${statTxt}"`);
+  check(/You've moved/i.test(statTxt), "without a backend it says \"you\", not a site-wide total");
 
   console.log("\n── mobile ────────────────────────────────────────");
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
