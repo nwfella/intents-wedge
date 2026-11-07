@@ -1,21 +1,42 @@
 /**
- * wedge-core — the whole product, driven by window.WEDGE_CONFIG.
+ * wedge-core — one engine, three products.
+ *
+ *   mode: "fixed"    a niche route: fixed or selectable origin, curated destination set
+ *   mode: "bridge"   any token → any token across all 39 chains the provider supports
  *
  * Deliberately has NO client-side minimum. Provider caps are per-route and
  * described as "temporary", so the UI submits whatever the user asks for and
- * surfaces the provider's own message when a corridor is capped. Hard-coding a
- * floor turns a transient routing limit into a permanent product limit.
+ * surfaces the provider's own message when a corridor is capped.
  */
 (function () {
   "use strict";
 
   const API = "https://1click.chaindefuser.com";
 
+  const CHAIN_LABEL = {
+    eth: "Ethereum", base: "Base", arb: "Arbitrum", op: "Optimism", pol: "Polygon",
+    bsc: "BNB Chain", avax: "Avalanche", gnosis: "Gnosis", scroll: "Scroll",
+    xlayer: "X Layer", monad: "Monad", plasma: "Plasma", bera: "Berachain",
+    sol: "Solana", near: "NEAR", tron: "Tron", ton: "TON", stellar: "Stellar",
+    sui: "Sui", aptos: "Aptos", movement: "Movement", starknet: "Starknet",
+    btc: "Bitcoin", zec: "Zcash", ltc: "Litecoin", bch: "Bitcoin Cash",
+    doge: "Dogecoin", dash: "Dash", xrp: "XRP Ledger", cardano: "Cardano",
+    aleo: "Aleo", miden: "Miden", hypercore: "HyperCore", hood: "Robinhood",
+    qtc: "QTC", prl: "Pearl", abs: "Abstract", fogo: "Fogo", adi: "ADI",
+  };
+  const CHAIN_ORDER = ["eth", "base", "arb", "bsc", "sol", "pol", "op", "near", "tron", "btc", "zec"];
+
+  // Empirically measured 2026-11-06: these origins refuse sub-~$1–2k quotes.
+  const CAPPED_ORIGINS = new Set(["bsc", "tron"]);
+
+  const EVM = new Set(["eth", "base", "arb", "op", "pol", "bsc", "avax", "gnosis", "scroll",
+    "xlayer", "monad", "plasma", "bera", "hood", "hypercore", "qtc", "prl", "abs", "fogo", "adi"]);
+  const FELT = new Set(["sui", "aptos", "miden", "movement", "starknet"]);
+
   const DEFAULTS = {
+    mode: "fixed",
     id: "route",
-    brand: "",
-    headline: "",
-    sub: "",
+    brand: "", headline: "", sub: "",
     referral: "wedge",
     feeBps: 20,
     recipient: "",
@@ -25,12 +46,14 @@
     origins: [],
     assets: ["USDC"],
     destinations: [],
+    defaultFrom: null,
+    defaultTo: null,
     minHint: "",
-    chainLabel: { bsc: "BNB Chain", eth: "Ethereum", base: "Base", arb: "Arbitrum", op: "Optimism", pol: "Polygon", sol: "Solana" },
     disclosure: ""
   };
   const CFG = Object.assign({}, DEFAULTS, window.WEDGE_CONFIG || {});
-  const chainName = (c) => CFG.chainLabel[c] || c;
+  const BRIDGE = CFG.mode === "bridge";
+  const chainName = (c) => CHAIN_LABEL[c] || c;
 
   let TOKENS = null;
   let polling = null;
@@ -39,26 +62,46 @@
   const $ = (id) => document.getElementById(id);
   const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
 
-  /* ── formatting ───────────────────────────────────────────── */
+  /* ── formatting / validation ──────────────────────────────── */
   function toBaseUnits(v, dec) {
     const s = String(v).trim();
     if (!/^\d*\.?\d*$/.test(s) || s === "" || s === ".") return null;
     const [i = "0", f = ""] = s.split(".");
     return BigInt(i || "0") * (10n ** BigInt(dec)) + BigInt((f + "0".repeat(dec)).slice(0, dec) || "0");
   }
-  function fromBaseUnits(v, dec) {
-    const s = BigInt(v).toString().padStart(dec + 1, "0");
-    const i = s.slice(0, s.length - dec);
-    const f = s.slice(s.length - dec).replace(/0+$/, "");
-    return f ? `${i}.${f}` : i;
-  }
   const fmt = (n, d = 2) => Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-  const isEvm = (c) => c !== "sol" && c !== "near" && c !== "btc" && c !== "aptos" && c !== "sui";
-  const addrOk = (c, a) => c === "sol" ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a) : /^0x[a-fA-F0-9]{40}$/.test(a);
-  const addrPlaceholder = (c) => c === "sol" ? "Base58 address" : "0x…";
+
+  /**
+   * Strict where we are confident, lenient where we are not. A false rejection
+   * blocks a legitimate user, which is worse than letting the provider's own
+   * validation answer — so unknown families only get a length sanity check.
+   */
+  function addrCheck(chain, a) {
+    a = (a || "").trim();
+    if (!a) return { ok: false, hint: "Required." };
+    if (EVM.has(chain)) return { ok: /^0x[a-fA-F0-9]{40}$/.test(a), hint: "0x + 40 hex characters" };
+    if (FELT.has(chain)) return { ok: /^0x[a-fA-F0-9]{20,64}$/.test(a), hint: "0x + up to 64 hex characters" };
+    if (chain === "sol") return { ok: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a), hint: "base58, 32–44 chars" };
+    if (chain === "zec") return {
+      ok: /^(t1|t3)[1-9A-HJ-NP-Za-km-z]{33}$/.test(a) || /^(u|zs)1[a-z0-9]{40,}$/i.test(a),
+      hint: "t1… / t3… (transparent) or u1… / zs1… (shielded)"
+    };
+    if (chain === "tron") return { ok: /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(a), hint: "T + 33 base58 chars" };
+    if (chain === "xrp") return { ok: /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(a), hint: "r + base58" };
+    if (chain === "stellar") return { ok: /^G[A-Z2-7]{55}$/.test(a), hint: "G + 55 base32 chars" };
+    if (chain === "ton") return { ok: /^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{20,}$/.test(a), hint: "EQ… / UQ… address" };
+    if (chain === "near") return { ok: /^([a-z0-9._-]{2,64}\.near|[a-f0-9]{64}|near)$/.test(a), hint: "name.near or 64-hex" };
+    if (chain === "cardano") return { ok: /^addr1[a-z0-9]{20,}$/.test(a), hint: "addr1…" };
+    if (chain === "btc" || chain === "ltc" || chain === "bch" || chain === "doge" || chain === "dash")
+      return { ok: a.length >= 26, hint: "legacy or bech32 address" };
+    return { ok: a.length >= 10, hint: "on-chain address" };
+  }
+
+  // Format hint for a chain, independent of whether the field is filled.
+  const hintOnly = (chain) => addrCheck(chain, "x").hint;
 
   /* ── shell ────────────────────────────────────────────────── */
-  function shell() {
+  function fixedForm() {
     const originField = CFG.allowOriginSelect ? `
       <div class="field">
         <label for="origin">From</label>
@@ -72,6 +115,40 @@
       </div>`;
 
     return `
+      ${originField}
+      <div class="field">
+        <label for="amount">You send</label>
+        <div class="amt-line">
+          <input id="amount" type="number" inputmode="decimal" min="0" step="any" placeholder="100" value="100">
+          <select id="asset" style="width:132px" aria-label="Asset"></select>
+        </div>
+        <div class="hint" id="amtHint"></div>
+      </div>
+      <div class="field">
+        <label for="destChain">Receive on</label>
+        <select id="destChain"></select>
+      </div>`;
+  }
+
+  function bridgeForm() {
+    return `
+      <div class="field">
+        <label for="fromToken">From</label>
+        <select id="fromToken"></select>
+      </div>
+      <div class="field">
+        <label for="amount">Amount</label>
+        <input id="amount" type="number" inputmode="decimal" min="0" step="any" placeholder="100" value="100">
+        <div class="hint" id="amtHint"></div>
+      </div>
+      <div class="field">
+        <label for="toToken">To</label>
+        <select id="toToken"></select>
+      </div>`;
+  }
+
+  function shell() {
+    return `
       <div class="wrap">
         <header>
           <div class="brand"><span class="dot"></span><span id="brand"></span></div>
@@ -80,21 +157,7 @@
         </header>
 
         <div class="card">
-          ${originField}
-
-          <div class="field">
-            <label for="amount">You send</label>
-            <div class="amt-line">
-              <input id="amount" type="number" inputmode="decimal" min="0" step="any" placeholder="100" value="100">
-              <select id="asset" style="width:132px" aria-label="Asset"></select>
-            </div>
-            <div class="hint" id="amtHint"></div>
-          </div>
-
-          <div class="field">
-            <label for="destChain">Receive on</label>
-            <select id="destChain"></select>
-          </div>
+          ${BRIDGE ? bridgeForm() : fixedForm()}
 
           <div class="field">
             <label for="recipient">Destination address</label>
@@ -104,8 +167,8 @@
 
           <div class="field">
             <label for="refund">Refund address <span class="opt" id="refundHint"></span></label>
-            <input id="refund" type="text" placeholder="0x…" spellcheck="false" autocomplete="off">
-            <div class="hint">Where funds return if the swap can't complete.</div>
+            <input id="refund" type="text" spellcheck="false" autocomplete="off">
+            <div class="hint" id="refundNote">Where funds return if the swap can't complete.</div>
           </div>
 
           <button id="go">Get quote</button>
@@ -118,6 +181,7 @@
             </div>
             <div class="kv"><span class="k">Rate</span><span class="v" id="rate">—</span></div>
             <div class="kv"><span class="k">Service fee</span><span class="v" id="feeLine">—</span></div>
+            <div class="kv"><span class="k">Total cost</span><span class="v" id="costUsd">—</span></div>
             <div class="kv"><span class="k">Est. time</span><span class="v" id="eta">—</span></div>
             <div class="kv"><span class="k">Quote expires</span><span class="v" id="expiry">—</span></div>
 
@@ -159,18 +223,6 @@
     $("feeDisc").textContent = CFG.disclosure ||
       `A ${(CFG.feeBps / 100).toFixed(2)}% service fee supports this page and is included in the all-in cost shown above.`;
 
-    if (CFG.allowOriginSelect) {
-      const os = $("origin");
-      CFG.origins.forEach(o => {
-        const opt = el("option"); opt.value = o.blockchain; opt.textContent = o.label; os.appendChild(opt);
-      });
-      os.value = CFG.origins[0].blockchain;
-      os.addEventListener("change", () => { rebuildAssets(); rebuildDests(); resetQuote(); });
-    } else {
-      $("originFixed").textContent = `USDC on ${chainName(CFG.origins[0].blockchain)}`;
-    }
-    $("refundHint").textContent = CFG.allowOriginSelect ? "" : `(on ${chainName(CFG.origins[0].blockchain)})`;
-
     $("copyBtn").addEventListener("click", () => {
       const a = $("depAddr").textContent;
       if (a && a !== "—") navigator.clipboard.writeText(a).then(() => {
@@ -181,22 +233,100 @@
     $("go").addEventListener("click", getQuote);
     $("amount").addEventListener("keydown", e => { if (e.key === "Enter") getQuote(); });
     $("amount").addEventListener("input", () => { if (current) resetQuote(); });
-    $("destChain").addEventListener("change", () => { syncAddrUi(); if (current) resetQuote(); });
 
     try {
       TOKENS = await (await fetch(`${API}/v0/tokens`)).json();
     } catch (e) {
       TOKENS = [];
     }
-    rebuildAssets();
-    rebuildDests();
-    syncAddrUi();
+
+    if (BRIDGE) bootBridge(); else bootFixed();
   }
 
-  const originChain = () => CFG.allowOriginSelect ? $("origin").value : CFG.origins[0].blockchain;
+  function orderedChains() {
+    const present = [...new Set((TOKENS || []).map(t => t.blockchain))];
+    const head = CHAIN_ORDER.filter(c => present.includes(c));
+    const tail = present.filter(c => !head.includes(c)).sort((a, b) => chainName(a).localeCompare(chainName(b)));
+    return head.concat(tail);
+  }
 
-  function rebuildAssets() {
-    const chain = originChain();
+  function fillTokenSelect(sel, selectedAssetId) {
+    sel.innerHTML = "";
+    orderedChains().forEach(chain => {
+      const group = el("optgroup");
+      group.label = chainName(chain);
+      (TOKENS || [])
+        .filter(t => t.blockchain === chain)
+        .sort((a, b) => a.symbol.localeCompare(b.symbol))
+        .forEach(t => {
+          const o = el("option");
+          o.value = t.assetId;
+          o.textContent = `${t.symbol} · ${chainName(t.blockchain)}`;
+          group.appendChild(o);
+        });
+      if (group.children.length) sel.appendChild(group);
+    });
+    if (selectedAssetId && [...sel.options].some(o => o.value === selectedAssetId)) sel.value = selectedAssetId;
+  }
+
+  function tokenByAssetId(id) {
+    return (TOKENS || []).find(t => t.assetId === id) || null;
+  }
+
+  function bootBridge() {
+    const first = CFG.defaultFrom || "USDC";
+    const to = CFG.defaultTo || "ZEC";
+    const findId = (sym, chain) => {
+      const t = (TOKENS || []).find(x => x.symbol === sym && x.blockchain === chain);
+      return t ? t.assetId : null;
+    };
+    fillTokenSelect($("fromToken"), findId(first, CFG.defaultFromChain || "base"));
+    fillTokenSelect($("toToken"), findId(to, CFG.defaultToChain || "zec"));
+
+    const sync = () => {
+      const o = tokenByAssetId($("fromToken").value);
+      const d = tokenByAssetId($("toToken").value);
+      if (d) {
+        $("recipient").placeholder = d.blockchain === "zec" ? "t1… / u1…" : (EVM.has(d.blockchain) ? "0x…" : "");
+        $("addrHint").textContent = `Sending to ${chainName(d.blockchain)} — ${hintOnly(d.blockchain)}`;
+      }
+      if (o) {
+        $("refundHint").textContent = `(on ${chainName(o.blockchain)})`;
+        $("refund").placeholder = EVM.has(o.blockchain) ? "0x…" : "";
+        $("refundNote").textContent = o.blockchain === "bsc" || o.blockchain === "tron"
+          ? `Refund address on ${chainName(o.blockchain)}. Heads up: this origin is capped at roughly $1–2k by the routing layer.`
+          : `Where funds return if the swap can't complete — must be on ${chainName(o.blockchain)}.`;
+      }
+      if (current) resetQuote();
+    };
+    $("fromToken").addEventListener("change", sync);
+    $("toToken").addEventListener("change", sync);
+    sync();
+  }
+
+  function bootFixed() {
+    if (CFG.allowOriginSelect) {
+      const os = $("origin");
+      CFG.origins.forEach(o => {
+        const opt = el("option"); opt.value = o.blockchain; opt.textContent = o.label; os.appendChild(opt);
+      });
+      os.value = CFG.origins[0].blockchain;
+      os.addEventListener("change", () => { rebuildFixedAssets(); rebuildFixedDests(); resetQuote(); });
+    } else {
+      $("originFixed").textContent = `${CFG.assets[0]} on ${chainName(CFG.origins[0].blockchain)}`;
+    }
+    $("refundHint").textContent = CFG.allowOriginSelect ? "" : `(on ${chainName(CFG.origins[0].blockchain)})`;
+    $("destChain").addEventListener("change", () => { syncFixedAddr(); if (current) resetQuote(); });
+
+    rebuildFixedAssets();
+    rebuildFixedDests();
+    syncFixedAddr();
+  }
+
+  const fixedOriginChain = () => CFG.allowOriginSelect ? $("origin").value : CFG.origins[0].blockchain;
+
+  function rebuildFixedAssets() {
+    const chain = fixedOriginChain();
     const sel = $("asset");
     sel.innerHTML = "";
     const avail = CFG.assets.filter(sym => assetFor(sym, chain));
@@ -205,8 +335,8 @@
     });
   }
 
-  function rebuildDests() {
-    const from = originChain();
+  function rebuildFixedDests() {
+    const from = fixedOriginChain();
     const sel = $("destChain");
     const prev = sel.value;
     sel.innerHTML = "";
@@ -218,10 +348,11 @@
     if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
   }
 
-  function syncAddrUi() {
+  function syncFixedAddr() {
     const c = $("destChain").value;
-    $("recipient").placeholder = addrPlaceholder(c);
-    $("addrHint").textContent = isEvm(c) ? "0x + 40 hex characters" : "base58, 32–44 chars";
+    const chk = addrCheck(c, "");
+    $("recipient").placeholder = EVM.has(c) ? "0x…" : "";
+    $("addrHint").textContent = `${chainName(c)} — ${chk.hint}`;
   }
 
   function assetFor(symbol, blockchain) {
@@ -247,25 +378,35 @@
   async function getQuote() {
     resetQuote();
     const amountHuman = $("amount").value;
-    const symbol = $("asset").value;
-    const from = originChain();
-    const destChain = $("destChain").value;
     const recipient = $("recipient").value.trim();
     const refund = $("refund").value.trim();
 
+    let origin, dest;
+    if (BRIDGE) {
+      origin = tokenByAssetId($("fromToken").value);
+      dest = tokenByAssetId($("toToken").value);
+    } else {
+      const from = fixedOriginChain();
+      const symbol = $("asset").value;
+      origin = assetFor(symbol, from);
+      dest = assetFor(symbol, $("destChain").value);
+    }
+
+    if (!origin) return showErr("Pick an asset to send.");
+    if (!dest) return showErr("Pick an asset to receive.");
+    if (origin.assetId === dest.assetId) return showErr("Pick two different assets.");
     if (!amountHuman || Number(amountHuman) <= 0) return showErr("Enter an amount to send.");
-    if (destChain === from) return showErr("Pick a different destination chain.");
-    if (!addrOk(destChain, recipient)) return showErr(`That doesn't look like a valid ${chainName(destChain)} address.`);
+
+    const dc = addrCheck(dest.blockchain, recipient);
+    if (!dc.ok) return showErr(`That doesn't look like a valid ${chainName(dest.blockchain)} address (${dc.hint}).`);
+    const rc = addrCheck(origin.blockchain, refund || recipient);
+    if (!rc.ok) return showErr(`Refund address must be on ${chainName(origin.blockchain)} (${rc.hint}).`);
 
     const btn = $("go");
     btn.disabled = true; btn.textContent = "Getting quote…";
 
     try {
       if (!TOKENS || !TOKENS.length) throw new Error("Still loading the asset list — try again in a moment.");
-      const origin = assetFor(symbol, from);
-      const dest = assetFor(symbol, destChain);
-      if (!origin) throw new Error(`${symbol} on ${chainName(from)} isn't routable right now.`);
-      if (!dest) throw new Error(`${symbol} on ${chainName(destChain)} isn't routable right now.`);
 
       const amount = toBaseUnits(amountHuman, origin.decimals);
       if (amount === null) throw new Error("Invalid amount.");
@@ -302,7 +443,7 @@
         current = {
           depositAddress: j.quote.depositAddress,
           depositMemo: j.quote.depositMemo || null,
-          origin, dest, amountHuman, symbol, from, destChain
+          origin, dest, amountHuman
         };
         startPolling();
       }
@@ -315,13 +456,16 @@
 
   function friendly(msg, status) {
     if (!msg) return `Quote failed (${status}).`;
-    const cap = /minimum|max(imum)?|limit|temporary/i.test(msg);
-    if (cap) {
+    const capped = /minimum|max(imum)?|limit|temporary/i.test(msg);
+    if (capped) {
       const m = msg.match(/\$([\d,]+)/);
       const floor = m ? ` ($${m[1]})` : "";
-      return `This route is temporarily capped by the routing layer${floor}. ` +
-             `Try a larger amount, or switch origin chain — the Ethereum/Base/Arbitrum corridors currently have no minimum. ` +
+      return `This corridor is temporarily capped by the routing layer${floor}. ` +
+             `Try a larger amount, or pick an origin on Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche or Scroll — those have no minimum. ` +
              `[${msg}]`;
+    }
+    if (/not available|no route/i.test(msg)) {
+      return `No route for this pair right now. Not every token combination has a solver — try a different destination or a more common asset. [${msg}]`;
     }
     return msg;
   }
@@ -333,20 +477,21 @@
     const inUsd = Number(q.amountInUsd || 0);
     const outUsd = Number(q.amountOutUsd || 0);
 
-    $("outAmt").textContent = `${fmt(outF, outF < 100 ? 4 : 2)} ${dest.symbol}`;
+    $("outAmt").textContent = `${fmt(outF, outF < 100 ? 6 : 2)} ${dest.symbol}`;
     const cost = inUsd > 0 && outUsd > 0 ? ((inUsd - outUsd) / inUsd) * 100 : null;
     $("costPct").textContent = cost !== null ? `${cost.toFixed(2)}%` : "—";
-    $("rate").textContent = inF > 0 ? `1 ${origin.symbol} = ${(outF / inF).toFixed(5)} ${dest.symbol}` : "—";
+    $("rate").textContent = inF > 0 ? `1 ${origin.symbol} = ${(outF / inF).toFixed(6)} ${dest.symbol}` : "—";
 
     const feeUsd = inUsd > 0 && outUsd > 0 ? inUsd - outUsd : null;
-    $("feeLine").textContent = feeUsd !== null
-      ? `${(CFG.feeBps / 100).toFixed(2)}% + routing · $${fmt(feeUsd)}`
-      : `${(CFG.feeBps / 100).toFixed(2)}%`;
+    $("feeLine").textContent = `${(CFG.feeBps / 100).toFixed(2)}%`;
+    $("costUsd").textContent = feeUsd !== null
+      ? `$${fmt(feeUsd)} of $${fmt(inUsd)}` + (cost !== null && cost > 0.35 && cost < 20 ? " · routing spread" : "")
+      : "—";
     $("eta").textContent = q.timeEstimate ? `~${q.timeEstimate}s` : "~40s";
     $("expiry").textContent = new Date(deadline).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 
     $("depAddr").textContent = q.depositAddress || "—";
-    $("sendAmt").textContent = fmt(inF, inF < 100 ? 4 : 2);
+    $("sendAmt").textContent = fmt(inF, inF < 100 ? 6 : 2);
     $("sendAsset").textContent = `${origin.symbol} on ${chainName(origin.blockchain)}`;
     $("destName").textContent = chainName(dest.blockchain);
 
@@ -422,7 +567,7 @@
         amountIn: s.amountInFormatted || current.amountHuman,
         amountInUsd: s.amountInUsd || null,
         amountOut: s.amountOutFormatted || null,
-        asset: `${current.symbol} ${current.from}→${current.destChain}`,
+        asset: `${current.origin.symbol} ${current.origin.blockchain}→${current.dest.symbol} ${current.dest.blockchain}`,
         feeBps: CFG.feeBps,
         ourBps: Math.round(CFG.feeBps / 2),
         status: "SUCCESS"

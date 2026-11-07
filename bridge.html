@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Any-Chain Bridge — any token, any chain, one deposit</title>
+<meta name="description" content="Convert any token to any token across 39 chains in one deposit. USDT or USDC to native Zcash, Bitcoin to a stablecoin, and everything between. Non-custodial routing through NEAR Intents.">
+<link rel="stylesheet" href="wedge.css">
+</head>
+<body>
+<div id="app"></div>
+<script>
+window.WEDGE_CONFIG = {
+  mode: "bridge",
+  id: "bridge",
+  brand: "Any-Chain Bridge",
+  headline: "Any token. Any chain.",
+  sub: "39 chains, 200+ assets. One deposit — no bridge approvals, no wrapped IOU, no destination gas.",
+  referral: "hermes-wedge-bridge",
+  feeBps: 20,
+  recipient: "0x94f080a1BF54d73d565AF55afDC622bABD62CE77",
+  defaultFrom: "USDC",
+  defaultFromChain: "base",
+  defaultTo: "ZEC",
+  defaultToChain: "zec",
+  minHint: "Origins on BNB Chain and Tron are capped at roughly $1–2k by the routing layer. Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, Scroll and Monad origins take any size."
+};
+</script>
+<script src="wedge-core.js"></script>
+</body>
+</html>

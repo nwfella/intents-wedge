@@ -114,6 +114,52 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const bAlt = await quote("USDC", "base", "arb", 25, 20);
   check(bAlt.status === 201, `$25 Base→Arbitrum accepted (HTTP ${bAlt.status})`);
 
+  console.log("\n── bridge: arbitrary token pairs ─────────────────");
+  check(fs.existsSync(path.join(ROOT, "bridge.html")), "bridge.html exists");
+  check(/mode:\s*"bridge"/.test(read("bridge.html")), "bridge page runs the engine in bridge mode");
+  check(read("bridge.html").includes(RECIPIENT), "bridge pays out to the current fee recipient");
+  check(!asset("USDT", "base") && !asset("USDT", "arb"),
+        "USDT genuinely absent on Base/Arbitrum — the picker cannot offer it");
+
+  const ZADDR = "t1LvAcGd715CLtmKVkprNQKNj6x55ULXuDL"; // dummy, random-derived; quoting only
+  const zec = asset("ZEC", "zec");
+  check(!!zec && zec.decimals === 8, `native ZEC resolved (${zec?.assetId}, ${zec?.decimals}dp)`);
+
+  const zQuote = async (sym, chain, usd) => {
+    const o = asset(sym, chain);
+    if (!o || !zec) return { status: 0, json: { message: "asset missing" } };
+    const body = {
+      dry: true, swapType: "EXACT_INPUT", slippageTolerance: 100,
+      originAsset: o.assetId, depositType: "ORIGIN_CHAIN", destinationAsset: zec.assetId,
+      amount: String(BigInt(Math.round(usd * 1e6)) * (10n ** BigInt(o.decimals - 6))),
+      refundTo: (chain === "bsc" || chain === "base" || chain === "arb" || chain === "eth") ? RECIPIENT : RECIPIENT,
+      refundType: "ORIGIN_CHAIN", recipient: ZADDR, recipientType: "DESTINATION_CHAIN",
+      deadline: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      referral: "verify-gate", quoteWaitingTimeMs: 4000,
+    };
+    body.appFees = [{ recipient: RECIPIENT, fee: 20 }];
+    const r = await fetch(`${API}/v0/quote`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    return { status: r.status, json: await r.json() };
+  };
+
+  await sleep(1200);
+  const zSmall = await zQuote("USDC", "base", 50);
+  check(zSmall.status === 201, `USDC/Base → native ZEC at $50 accepted (HTTP ${zSmall.status})`);
+  if (zSmall.status === 201) {
+    const got = Number(zSmall.json.quote.amountOutFormatted);
+    check(got > 0, `ZEC output: ${got} ZEC for $50`);
+  }
+
+  await sleep(1200);
+  const zBsc = await zQuote("USDT", "bsc", 1500);
+  check(zBsc.status === 201, `USDT/BSC → native ZEC at $1,500 accepted (HTTP ${zBsc.status})`);
+
+  await sleep(1200);
+  const zBscSmall = await zQuote("USDT", "bsc", 50);
+  check(zBscSmall.status === 400, "USDT/BSC below the cap is refused — the cap follows the origin, not the pair");
+
   console.log("\n── fee actually costs the user ───────────────────");
   await sleep(1200);
   const aZero = await quote("USDC", "bsc", "base", 2000, 0);

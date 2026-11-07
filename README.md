@@ -7,6 +7,7 @@ Zero dependencies, static HTML, no build step, no backend.
 |---|---|---|---|
 | `index.html` | BNB Chain → Base / Arbitrum / Ethereum / Polygon | whale / treasury | **capped, ~$1–2k** |
 | `l2.html` | Ethereum ⇄ Base ⇄ Arbitrum ⇄ Optimism ⇄ Polygon | retail | **none** |
+| `bridge.html` | **any token → any token**, 39 chains / 216 assets | lowest-friction | depends on origin |
 
 ```
 index.html      route A — CAPPED corridor (BSC), fixed origin
@@ -45,6 +46,62 @@ Two consequences:
 
 The cap is described by the provider as *temporary* and it moves with liquidity, so treat the
 table above as a snapshot, not a constant. The gate is what keeps this honest.
+
+## Universal bridge (`bridge.html`)
+
+`mode: "bridge"` swaps the two fixed selects for two grouped token pickers over the provider's
+entire asset list — 216 tokens on 39 chains, including non-EVM destinations like native Zcash,
+Bitcoin, Monero-adjacent chains and Tron.
+
+### What actually works, measured
+
+Your stated route, tested 2026-11-06:
+
+| Route | Result |
+|---|---|
+| **USDT on BSC → ZEC native** | ✅ from ~$1,500 (BSC origin is capped) |
+| **USDC on Base → ZEC native** | ✅ from $10, no minimum |
+| USDT on Base / Arbitrum | ❌ **USDT does not exist on those chains** in the provider's list — use USDC |
+
+USDT lives on: aptos, avax, bsc, eth, gnosis, miden, near, op, pol, scroll, sol, ton, tron.
+ZEC lives on: aptos, near, sol, starknet, **zec (native)**.
+
+The picker is built from `/v0/tokens` at runtime, so a token that does not exist on a chain
+simply isn't offered — that class of error cannot happen in the UI.
+
+### Capped origins
+
+The cap follows the **origin chain**, not the pair:
+
+| Origin | Sub-$1k? |
+|---|---|
+| bsc, tron | ❌ capped ~$1–2k |
+| eth, base, arb, op, pol, avax, scroll, monad, xlayer, hypercore | ✅ any size |
+
+The bridge flags a capped origin in the refund-address note before the user submits, rather
+than letting them discover it on a failed quote.
+
+### Exotic pairs carry real spread — say so
+
+ZEC legs cost more than stablecoin legs, and small tickets cost more than large ones:
+
+| Route | Size | All-in |
+|---|---|---|
+| USDC/Base → ZEC | $50 | ~0.85–1.2% |
+| USDC/Base → ZEC | $500 | ~0.47% |
+| USDC/Base → ZEC | $3,000 | ~0.44% |
+
+Of that, 20 bps is the fee and the rest is solver spread on the pair. The UI now shows
+"Service fee" and "Total cost" as separate rows, and labels the gap as routing spread, so a
+user comparing against a CEX sees the real number rather than your 0.20%.
+
+### "Trustless" — the accurate word is non-custodial
+
+The page says non-custodial, and that is what it is: no custodian holds the funds, and the
+quote-specific deposit address is not yours. It is **not** trustless in the cryptographic
+sense — solvers post inventory they must honour, and quotes are signed by the provider. If
+you need trustless, that is a different architecture (atomic swaps or a light client), and
+this rail is not it. Don't put "trustless" in the marketing copy.
 
 ## Verified live behaviour
 

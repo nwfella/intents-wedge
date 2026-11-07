@@ -159,6 +159,55 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   }
   const bShot = await shot("route-b.png");
 
+  /* ─────────── bridge: any token → any chain ─────────── */
+  console.log("\n── bridge · token matrix ─────────────────────────");
+  await goto(`${BASE}/bridge.html`);
+  await sleep(2600);
+  check(await evaluate("!!document.getElementById('fromToken')"), "token picker present");
+  const nFrom = await evaluate("document.querySelectorAll('#fromToken option').length");
+  check(nFrom > 150, `full asset list loaded (${nFrom} tokens)`);
+  const nGroups = await evaluate("document.querySelectorAll('#fromToken optgroup').length");
+  check(nGroups > 20, `${nGroups} chains grouped in the picker`);
+  check((await evaluate("document.getElementById('toToken').selectedOptions[0].parentElement.label")) === "Zcash",
+        "defaults to a native Zcash destination");
+
+  console.log("\n── bridge · USDC/Base → native ZEC ───────────────");
+  await evaluate(`(() => {
+    document.getElementById('amount').value='100';
+    document.getElementById('recipient').value='t1LvAcGd715CLtmKVkprNQKNj6x55ULXuDL';
+    document.getElementById('refund').value='${ADDR}';
+    document.getElementById('go').click();
+  })()`);
+  const zShown = await waitQuote(30000);
+  const zErr = await evaluate("document.getElementById('err').textContent || ''");
+  check(zShown, zShown ? "quotes a non-stablecoin destination across chains" : `ZEC quote failed: ${zErr}`);
+  if (zShown) {
+    const zOut = await evaluate("document.getElementById('outAmt').textContent");
+    const zDep = await evaluate("document.getElementById('depAddr').textContent");
+    check(/ZEC/.test(zOut), `receives ${zOut}`);
+    check(/^0x[a-fA-F0-9]{40}$/.test(zDep), "deposit address issued on the origin chain");
+  }
+  const bridgeShot = await shot("bridge-zec.png");
+
+  console.log("\n── bridge · address validation per chain ─────────");
+  await evaluate(`(() => {
+    document.getElementById('recipient').value='0xdeadbeef';
+    document.getElementById('go').click();
+  })()`);
+  await sleep(700);
+  const badZ = await evaluate("document.getElementById('err').textContent || ''");
+  check(/Zcash/i.test(badZ), `EVM address rejected for a ZEC destination: "${badZ.slice(0, 70)}"`);
+
+  console.log("\n── bridge · capped origin is flagged up front ────");
+  await evaluate(`(() => {
+    const s=document.getElementById('fromToken');
+    const o=[...s.options].find(x => x.parentElement.label === 'BNB Chain' && x.textContent.startsWith('USDT'));
+    s.value=o.value; s.dispatchEvent(new Event('change'));
+  })()`);
+  await sleep(500);
+  const capNote = await evaluate("document.getElementById('refundNote').textContent");
+  check(/capped/i.test(capNote), "BSC origin warns about the cap before the user submits");
+
   console.log("\n── mobile ────────────────────────────────────────");
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(700);
