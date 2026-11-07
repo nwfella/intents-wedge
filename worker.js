@@ -126,12 +126,10 @@ export default {
           return json({ message: "not our channel" }, 403, cors);
         }
 
-        await env.STATS.put(key, JSON.stringify({
-          usd: Number(st.swapDetails?.amountInUsd) || 0,
-          ts: Date.now(),
-          route: qr.referral || null,
-        }));
-        return new Response(JSON.stringify(await totals(env)), {
+        const usd = Number(st.swapDetails?.amountInUsd) || 0;
+        await env.STATS.put(key, JSON.stringify({ usd, ts: Date.now(), route: qr.referral || null }),
+          { metadata: { usd } }); // metadata lets totals() sum without a get() per swap
+        return new Response(JSON.stringify(await totals(env, true)), {
           status: 200, headers: { ...cors, "Content-Type": "application/json" },
         });
       }
@@ -143,15 +141,28 @@ export default {
   },
 };
 
-async function totals(env) {
+/**
+ * Free-tier economics matter here: KV allows 100k reads/day and 1000 KV
+ * operations per invocation. Summing via list(metadata) instead of one get()
+ * per swap keeps a refresh at one operation per 1000 swaps, and the 60s
+ * aggregate cache keeps a page view at a single read.
+ */
+async function totals(env, force = false) {
   if (!env.STATS) return { usd: null, count: 0, configured: false };
+
+  if (!force) {
+    const c = await env.STATS.get("cache:total", "json");
+    if (c && Date.now() - (c.at || 0) < 60000) return { usd: c.usd, count: c.count, configured: true };
+  }
+
   let cursor, usd = 0, count = 0;
   do {
     const page = await env.STATS.list({ prefix: "tx:", cursor });
-    const vals = await Promise.all(page.keys.map(k => env.STATS.get(k.name, "json")));
-    for (const v of vals) { if (v) { usd += Number(v.usd) || 0; count++; } }
+    for (const k of page.keys) { usd += Number(k.metadata?.usd) || 0; count++; }
     cursor = page.list_complete ? null : page.cursor;
   } while (cursor);
+
+  await env.STATS.put("cache:total", JSON.stringify({ usd, count, at: Date.now() }));
   return { usd, count, configured: true };
 }
 
